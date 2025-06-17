@@ -1,0 +1,763 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Event driven workflow for NBA data processing
+
+# This template follows the architecture from the AWS Big Data Blog:
+# https://aws.amazon.com/blogs/big-data/build-a-serverless-event-driven-workflow-with-aws-glue-and-amazon-eventbridge/
+
+Parameters:
+
+  S3BucketName:
+    Type: String
+    Description: S3 bucket used to store NBA data, CloudTrail logs, job scripts, and any temporary files generated during AWS Glue ETL job runs.
+
+  StatsWorkflowName:
+    Type: String
+    Description: Name of the data processing workflow that includes a job to add new columns to the player stats CSV, convert it to Parquet, and load it into an Apache Iceberg table using a MERGE operation.
+    Default: s3trigger_stats_workflow
+
+  MetadataWorkflowName:
+    Type: String
+    Description: Name of the data processing workflow that includes a job to add new columns to the player metadata CSV, convert it to Parquet, and load it into an Apache Iceberg table using a MERGE operation.
+    Default: s3trigger_metadata_workflow
+
+  DatabaseName:
+    Type: String
+    Description: The AWS Glue Data Catalog database that stores the tables created in this walkthrough.
+    Default: nba_data_lakehouse
+
+  StatsTableName:
+    Type: String
+    Description: Name of the Apache Iceberg table that stores NBA player statistics.
+    Default: player_stats
+
+  PlayerMetadataTableName:
+    Type: String
+    Description: Name of the Apache Iceberg table that stores NBA player metadata.
+    Default: player_metadata
+
+  RawStatsPrefix:
+    Type: String
+    Description: S3 key prefix for raw player stats files (e.g., raw_stats/)
+    Default: raw_stats
+
+  RawMetadataPrefix:
+    Type: String
+    Description: S3 key prefix for raw player metadata files (e.g., raw_metadata/)
+    Default: raw_metadata
+
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      -
+        Label:
+          default: Configuration
+        Parameters:
+          - StatsWorkflowName
+          - MetadataWorkflowName
+          - S3BucketName
+          - DatabaseName
+          - StatsTableName
+          - PlayerMetadataTableName
+          - RawStatsPrefix
+          - RawMetadataPrefix
+
+Resources:
+  StatsTrail:
+    DependsOn: 
+      - S3Bucket
+      - S3BucketPolicy
+    Type: AWS::CloudTrail::Trail
+    Properties:
+      TrailName: !Sub 's3-stats-event-trail-${AWS::StackName}'
+      IsLogging: True
+      S3BucketName: !Ref S3BucketName
+      S3KeyPrefix: cloudtrail_stats
+      EventSelectors:
+        - DataResources:
+            - Type: AWS::S3::Object
+              Values:
+              - !Sub 'arn:aws:s3:::${S3BucketName}/${RawStatsPrefix}/'
+          IncludeManagementEvents: False
+          ReadWriteType: WriteOnly
+
+  MetadataTrail:
+    DependsOn: 
+      - S3Bucket
+      - S3BucketPolicy
+    Type: AWS::CloudTrail::Trail
+    Properties:
+      TrailName: !Sub 's3-metadata-event-trail-${AWS::StackName}'
+      IsLogging: True
+      S3BucketName: !Ref S3BucketName
+      S3KeyPrefix: cloudtrail_metadata
+      EventSelectors:
+        - DataResources:
+            - Type: AWS::S3::Object
+              Values:
+              - !Sub 'arn:aws:s3:::${S3BucketName}/${RawMetadataPrefix}/'
+          IncludeManagementEvents: False
+          ReadWriteType: WriteOnly
+
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref S3BucketName
+      AccessControl: Private
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: True
+        BlockPublicPolicy: True
+        IgnorePublicAcls: True
+        RestrictPublicBuckets: True
+
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3BucketName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - cloudtrail.amazonaws.com
+            Action:
+              - s3:GetBucketAcl
+            Resource: !Sub arn:aws:s3:::${S3BucketName}
+          - Effect: Allow
+            Principal:
+              Service:
+                - cloudtrail.amazonaws.com
+            Action:
+              - s3:PutObject
+            Resource:
+              - !Sub arn:aws:s3:::${S3BucketName}/cloudtrail_stats/AWSLogs/*
+              - !Sub arn:aws:s3:::${S3BucketName}/cloudtrail_metadata/AWSLogs/*
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+
+  StatsEventDrivenWorkflow:
+    Type: AWS::Glue::Workflow
+    Properties:
+      Name: !Ref StatsWorkflowName
+      Description: Glue workflow triggered by S3 PutObject Event - stats
+  
+  MetadataEventDrivenWorkflow:
+    Type: AWS::Glue::Workflow
+    Properties:
+      Name: !Ref MetadataWorkflowName
+      Description: Glue workflow triggered by S3 PutObject Event - metadata 
+
+  StatsJobTrigger:
+    DependsOn: StatsJob
+    Type: AWS::Glue::Trigger
+    Properties:
+      Name: !Sub '${StatsWorkflowName}_job_trigger'
+      Description: !Sub Glue trigger which is listening on S3 PutObject events in ${RawStatsPrefix} bucket
+      Type: EVENT
+      Actions:
+        - JobName: !Ref StatsJob
+      WorkflowName: !Ref StatsEventDrivenWorkflow
+
+  MetadataJobTrigger:
+    DependsOn: PlayerMetadataJob
+    Type: AWS::Glue::Trigger
+    Properties:
+      Name: !Sub '${MetadataWorkflowName}_job_trigger'
+      Description: !Sub Glue trigger which is listening on S3 PutObject events in ${RawMetadataPrefix} bucket
+      Type: EVENT
+      Actions:
+        - JobName: !Ref PlayerMetadataJob
+      WorkflowName: !Ref MetadataEventDrivenWorkflow
+
+  EventBridgeRuleStats:
+    DependsOn:
+      - EventBridgeGlueExecutionRole
+      - StatsEventDrivenWorkflow
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub s3_stats_file_upload_trigger_rule-${AWS::StackName}
+      EventPattern:
+        source:
+          - aws.s3
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          eventSource:
+            - s3.amazonaws.com
+          eventName:
+            - PutObject
+          requestParameters:
+            bucketName:
+              - !Ref S3BucketName
+            key:
+              - prefix: !Sub ${RawStatsPrefix}/
+      Targets:
+        -
+          Arn: !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:workflow/${StatsEventDrivenWorkflow}
+          Id: CloudTrailTriggersWorkflow
+          RoleArn: !GetAtt 'EventBridgeGlueExecutionRole.Arn'
+
+  EventBridgeRuleMetadata:
+    DependsOn:
+      - EventBridgeGlueExecutionRole
+      - MetadataEventDrivenWorkflow
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub s3_metadata_file_upload_trigger_rule-${AWS::StackName}
+      EventPattern:
+        source:
+          - aws.s3
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          eventSource:
+            - s3.amazonaws.com
+          eventName:
+            - PutObject
+          requestParameters:
+            bucketName:
+              - !Ref S3BucketName
+            key:
+              - prefix: !Sub ${RawMetadataPrefix}/
+      Targets:
+        -
+          Arn: !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:workflow/${MetadataEventDrivenWorkflow}
+          Id: CloudTrailTriggersWorkflow
+          RoleArn: !GetAtt 'EventBridgeGlueExecutionRole.Arn'
+
+  EventBridgeGlueExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub EventBridgeGlueExecutionRole-${AWS::StackName}
+      Description: Has permissions to invoke the NotifyEvent API for an AWS Glue workflow.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+
+  GlueNotifyStatsEventPolicy:
+    DependsOn:
+      - EventBridgeGlueExecutionRole
+      - StatsEventDrivenWorkflow
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub GlueNotifyStatsEventPolicy-${AWS::StackName}
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Action:
+              - glue:notifyEvent
+            Resource: !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:workflow/${StatsEventDrivenWorkflow}
+      Roles:
+        - !Ref EventBridgeGlueExecutionRole
+
+  GlueNotifyMetadataEventPolicy:
+    DependsOn:
+      - EventBridgeGlueExecutionRole
+      - MetadataEventDrivenWorkflow
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub GlueNotifyMetadataEventPolicy-${AWS::StackName}
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Action:
+              - glue:notifyEvent
+            Resource: !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:workflow/${MetadataEventDrivenWorkflow}
+      Roles:
+        - !Ref EventBridgeGlueExecutionRole
+
+  GlueServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub GlueServiceRole-${AWS::StackName}
+      Description: Runs the AWS Glue job that has permission to download the script, read data from the source, and write data to the destination after conversion.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - glue.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+
+  S3DataPolicy:
+    DependsOn:
+      - GlueServiceRole
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub S3DataPolicy-${AWS::StackName}
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+            Resource: !Sub arn:aws:s3:::${S3BucketName}/*
+          -
+            Effect: "Allow"
+            Action:
+              - s3:ListBucket
+            Resource: !Sub arn:aws:s3:::${S3BucketName}
+      Roles:
+        - !Ref GlueServiceRole
+
+  Database:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Ref DatabaseName
+        Description: This database is used to organize the Apache Iceberg tables created in this walkthrough.
+
+  # Instead of using a Glue Crawler to create this table from data in S3,
+  # we define the schema explicitly here for cost-efficiency and control.
+  StatsTable:
+    DependsOn: Database
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref DatabaseName
+      TableInput:
+        Name: !Ref StatsTableName
+        Description: Apache Iceberg table with player totals for NBA season.
+        TableType: EXTERNAL_TABLE
+        StorageDescriptor:
+          Columns:
+            - Name: "player_id"
+              Type: "bigint"
+            - Name: "player_name"
+              Type: "string"
+            - Name: "nickname"
+              Type: "string"
+            - Name: "team_id"
+              Type: "bigint"
+            - Name: "team_abbreviation"
+              Type: "string"
+            - Name: "age"
+              Type: "double"
+            - Name: "gp"
+              Type: "int"
+            - Name: "w"
+              Type: "int"
+            - Name: "l"
+              Type: "int"
+            - Name: "w_pct"
+              Type: "double"
+            - Name: "min"
+              Type: "double"
+            - Name: "fgm"
+              Type: "int"
+            - Name: "fga"
+              Type: "int"
+            - Name: "fg_pct"
+              Type: "double"
+            - Name: "fg3m"
+              Type: "int"
+            - Name: "fg3a"
+              Type: "int"
+            - Name: "fg3_pct"
+              Type: "double"
+            - Name: "ftm"
+              Type: "int"
+            - Name: "fta"
+              Type: "int"
+            - Name: "ft_pct"
+              Type: "double"
+            - Name: "oreb"
+              Type: "int"
+            - Name: "dreb"
+              Type: "int"
+            - Name: "reb"
+              Type: "int"
+            - Name: "ast"
+              Type: "int"
+            - Name: "tov"
+              Type: "int"
+            - Name: "stl"
+              Type: "int"
+            - Name: "blk"
+              Type: "int"
+            - Name: "blka"
+              Type: "int"
+            - Name: "pf"
+              Type: "int"
+            - Name: "pfd"
+              Type: "int"
+            - Name: "pts"
+              Type: "int"
+            - Name: "plus_minus"
+              Type: "int"
+            - Name: "nba_fantasy_pts"
+              Type: "double"
+            - Name: "dd2"
+              Type: "int"
+            - Name: "td3"
+              Type: "int"
+            - Name: "ingestion_date"
+              Type: "date"
+            - Name: "pts_per_game"
+              Type: "double"
+            - Name: "reb_per_game"
+              Type: "double"
+            - Name: "ast_per_game"
+              Type: "double"
+            - Name: "tov_per_game"
+              Type: "double"
+            - Name: "stl_per_game"
+              Type: "double"
+            - Name: "blk_per_game"
+              Type: "double"
+            - Name: "min_per_game"
+              Type: "double"
+            - Name: "GP_RANK"
+              Type: "int"
+            - Name: "W_RANK"
+              Type: "int"
+            - Name: "L_RANK"
+              Type: "int"
+            - Name: "W_PCT_RANK"
+              Type: "int"
+            - Name: "MIN_RANK"
+              Type: "int"
+            - Name: "FGM_RANK"
+              Type: "int"
+            - Name: "FGA_RANK"
+              Type: "int"
+            - Name: "FG_PCT_RANK"
+              Type: "int"
+            - Name: "FG3M_RANK"
+              Type: "int"
+            - Name: "FG3A_RANK"
+              Type: "int"
+            - Name: "FG3_PCT_RANK"
+              Type: "int"
+            - Name: "FTM_RANK"
+              Type: "int"
+            - Name: "FTA_RANK"
+              Type: "int"
+            - Name: "FT_PCT_RANK"
+              Type: "int"
+            - Name: "OREB_RANK"
+              Type: "int"
+            - Name: "DREB_RANK"
+              Type: "int"
+            - Name: "REB_RANK"
+              Type: "int"
+            - Name: "AST_RANK"
+              Type: "int"
+            - Name: "TOV_RANK"
+              Type: "int"
+            - Name: "STL_RANK"
+              Type: "int"
+            - Name: "BLK_RANK"
+              Type: "int"
+            - Name: "BLKA_RANK"
+              Type: "int"
+            - Name: "PF_RANK"
+              Type: "int"
+            - Name: "PFD_RANK"
+              Type: "int"
+            - Name: "PTS_RANK"
+              Type: "int"
+            - Name: "PLUS_MINUS_RANK"
+              Type: "int"
+            - Name: "NBA_FANTASY_PTS_RANK"
+              Type: "int"
+            - Name: "DD2_RANK"
+              Type: "int"
+            - Name: "TD3_RANK"
+              Type: "int"
+            - Name: "PTS_PER_GAME_RANK"
+              Type: "int"
+            - Name: "REB_PER_GAME_RANK"
+              Type: "int"
+            - Name: "AST_PER_GAME_RANK"
+              Type: "int"
+            - Name: "TOV_PER_GAME_RANK"
+              Type: "int"
+            - Name: "STL_PER_GAME_RANK"
+              Type: "int"
+            - Name: "BLK_PER_GAME_RANK"
+              Type: "int"
+            - Name: "MIN_PER_GAME_RANK"
+              Type: "int"
+            - Name: "PTS_PER_SHOT"
+              Type: "double"
+            - Name: "PTS_PER_SHOT_RANK"
+              Type: "int"
+          Location: !Sub 's3://${S3BucketName}/${DatabaseName}/${RawStatsPrefix}'
+      OpenTableFormatInput:
+        IcebergInput:
+          MetadataOperation: "CREATE"
+          Version: "2"
+
+
+  # Instead of using a Glue Crawler to create this table from data in S3,
+  # we define the schema explicitly here for cost-efficiency and control.
+  PlayerMetadataTable:
+    DependsOn: Database
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref DatabaseName
+      TableInput:
+        Name: !Ref PlayerMetadataTableName
+        Description: Apache Iceberg table with metadata about NBA players.
+        TableType: EXTERNAL_TABLE
+        StorageDescriptor:
+          Columns:
+            - Name: "player_id"
+              Type: "bigint"
+            - Name: "player_name"
+              Type: "string"
+            - Name: "team_name"
+              Type: "string"
+            - Name: "position"
+              Type: "string"
+            - Name: "height"
+              Type: "string"
+            - Name: "height_cm"
+              Type: "double"
+            - Name: "weight"
+              Type: "int"
+            - Name: "country"
+              Type: "string"
+            - Name: "birthdate"
+              Type: "date"
+            - Name: "draft_year"
+              Type: "int"
+            - Name: "draft_number"
+              Type: "int"
+            - Name: "from_year"
+              Type: "int"
+            - Name: "to_year"
+              Type: "int"
+            - Name: "ingestion_date"
+              Type: "date"
+            - Name: "weight_kg"
+              Type: "double"
+          Location: !Sub 's3://${S3BucketName}/${DatabaseName}/${RawMetadataPrefix}'
+      OpenTableFormatInput:
+        IcebergInput:
+          MetadataOperation: "CREATE"
+          Version: "2"
+
+  StatsJob:
+    DependsOn:
+      - Database
+      - StatsTable
+      - S3CustomResource
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub '${StatsWorkflowName}_etl_job'
+      Description: Glue job that adds new columns to the player stats CSV, converts it to Parquet, and loads it into an Apache Iceberg table using a MERGE operation.
+      Role: !Ref GlueServiceRole
+      GlueVersion: 4.0
+      Command:
+        Name: glueetl
+        ScriptLocation: !Sub 's3://${S3BucketName}/script/nba_stats_etl.py'
+        PythonVersion: 3
+      WorkerType: G.1X
+      NumberOfWorkers: 2
+      ExecutionProperty:
+        MaxConcurrentRuns: 1
+      DefaultArguments:
+        "--catalog_name": "glue_iceberg"
+        "--database_name": !Ref DatabaseName
+        "--table_name": !Ref StatsTableName
+        "--s3_bucket_name": !Ref S3BucketName
+        "--input_prefix": !Ref RawStatsPrefix
+        "--job-language": "python"
+        "--job-bookmark-option": "job-bookmark-disable"
+        "--conf": >-
+          spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+          --conf spark.sql.catalog.glue_iceberg=org.apache.iceberg.spark.SparkCatalog
+          --conf spark.sql.catalog.glue_iceberg.catalog-impl=org.apache.iceberg.aws.glue.GlueCatalog
+          --conf spark.sql.catalog.glue_iceberg.warehouse=s3://${S3BucketName}/
+          --conf spark.sql.catalog.glue_iceberg.io-impl=org.apache.iceberg.aws.s3.S3FileIO
+        "--datalake-formats": "iceberg"
+
+  PlayerMetadataJob:
+    DependsOn:
+      - Database
+      - PlayerMetadataTable
+      - S3CustomResource
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub '${MetadataWorkflowName}_etl_job'
+      Description: Glue job that adds new columns to the player metadata CSV, converts it to Parquet, and loads it into an Apache Iceberg table using a MERGE operation.
+      Role: !Ref GlueServiceRole
+      GlueVersion: 4.0
+      Command:
+        Name: glueetl
+        ScriptLocation: !Sub 's3://${S3BucketName}/script/nba_metadata_etl.py'
+        PythonVersion: 3
+      WorkerType: G.1X
+      NumberOfWorkers: 2
+      ExecutionProperty:
+        MaxConcurrentRuns: 1
+      DefaultArguments:
+        "--catalog_name": "glue_iceberg"
+        "--database_name": !Ref DatabaseName
+        "--table_name": !Ref PlayerMetadataTableName
+        "--s3_bucket_name": !Ref S3BucketName
+        "--input_prefix": !Ref RawMetadataPrefix
+        "--job-language": "python"
+        "--job-bookmark-option": "job-bookmark-disable"
+        "--conf": >-
+          spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+          --conf spark.sql.catalog.glue_iceberg=org.apache.iceberg.spark.SparkCatalog
+          --conf spark.sql.catalog.glue_iceberg.catalog-impl=org.apache.iceberg.aws.glue.GlueCatalog
+          --conf spark.sql.catalog.glue_iceberg.warehouse=s3://${S3BucketName}/
+          --conf spark.sql.catalog.glue_iceberg.io-impl=org.apache.iceberg.aws.s3.S3FileIO
+        "--datalake-formats": "iceberg"
+
+  S3CustomResource:
+    DependsOn: S3Bucket
+    Type: Custom::S3CustomResource
+    Properties:
+      ServiceToken: !GetAtt LambdaFunction.Arn
+      the_bucket: !Ref S3BucketName
+      the_stats_script_file_key: script/nba_stats_etl.py
+      the_metadata_script_file_key: script/nba_metadata_etl.py
+      the_origin_stats_script_url: https://raw.githubusercontent.com/oiivantsov/nba-glue-etl-jobs/refs/heads/main/nba-totals-etl/nba-totals-etl.py
+      the_origin_metadata_script_url: https://raw.githubusercontent.com/oiivantsov/nba-glue-etl-jobs/refs/heads/main/nba-metadata-etl/nba-metadata-etl.py
+
+  # source code: https://aws.amazon.com/blogs/big-data/build-a-serverless-event-driven-workflow-with-aws-glue-and-amazon-eventbridge/
+  LambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      FunctionName: !Sub 'lambda-custom-resource-${AWS::StackName}'
+      Description: This is used as an AWS CloudFormation custom resource to copy job scripts from GitHub repository to S3 bucket.
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 360
+      Runtime: python3.8
+      Code:
+        ZipFile: !Sub
+          - |
+            import boto3
+            from botocore.client import ClientError
+            import cfnresponse
+            import urllib.request
+            def handler(event, context):
+                # Init
+                the_event = event['RequestType'].strip()
+                print("The event is: ", the_event)
+                response_data = {}
+                s3 = boto3.client('s3')
+                s3_resource = boto3.resource('s3')
+                # Retrieve parameters
+                the_bucket = event['ResourceProperties']['the_bucket'].strip()
+                the_stats_script_file_key = event['ResourceProperties']['the_stats_script_file_key'].strip()
+                the_metadata_script_file_key = event['ResourceProperties']['the_metadata_script_file_key'].strip()
+                the_origin_stats_script_url = event['ResourceProperties']['the_origin_stats_script_url'].strip()
+                the_origin_metadata_script_url = event['ResourceProperties']['the_origin_metadata_script_url'].strip()
+                try:
+                    if the_event in ('Create', 'Update'):
+                        # Copying job script
+                        try:
+                            reqC = urllib.request.Request(the_origin_stats_script_url, method='GET')
+                            urlDataC = urllib.request.urlopen(reqC).read().decode('utf-8')
+                            objC = s3_resource.Object(the_bucket,the_stats_script_file_key)
+                            objC.put(Body = urlDataC)
+                            reqW = urllib.request.Request(the_origin_metadata_script_url, method='GET')
+                            urlDataW = urllib.request.urlopen(reqW).read().decode('utf-8')
+                            objW = s3_resource.Object(the_bucket,the_metadata_script_file_key)
+                            objW.put(Body = urlDataW)
+                        except ClientError as ce:
+                            print("Failed to copy the source code file.")
+                            print(ce)
+                            print(ce.response['ResponseMetadata'])
+                        except urllib.error.HTTPError as e:
+                            print(e)
+                    elif the_event == 'Delete':
+                        try:
+                          pages = []
+                          paginator = s3.get_paginator('list_objects_v2')
+                          for page in paginator.paginate(Bucket=the_bucket):
+                            pages.extend(page['Contents'])
+                          for source in pages:
+                            s3.delete_object(Bucket=the_bucket,Key=source["Key"])
+                        except ClientError as ce:
+                            print(f"Failed to delete the files: {ce}")
+
+                    # Everything OK... send the signal back
+                    print("Completed.")
+                    cfnresponse.send(event,
+                                      context,
+                                      cfnresponse.SUCCESS,
+                                      response_data)
+                except Exception as e:
+                    print("Failed...")
+                    print(str(e))
+                    response_data['Data'] = str(e)
+                    cfnresponse.send(event,
+                                      context,
+                                      cfnresponse.FAILED,
+                                      response_data)
+          - Region: !Ref AWS::Region
+
+  # source code: https://aws.amazon.com/blogs/big-data/build-a-serverless-event-driven-workflow-with-aws-glue-and-amazon-eventbridge/
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub LambdaExecutionRole-${AWS::StackName}
+      Description: Runs the Lambda function that has permission to upload the job scripts to the S3 bucket.
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+        Version: '2012-10-17'
+      Path: "/"
+      Policies:
+        - PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Effect: Allow
+                Resource: arn:aws:logs:*:*:*
+          PolicyName: !Sub AWSLambda-CW-${AWS::StackName}
+        - PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              -
+                Effect: "Allow"
+                Action:
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource:
+                  - !Sub arn:aws:s3:::${S3BucketName}/*
+              -
+                Effect: "Allow"
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::${S3BucketName}
+          PolicyName: !Sub AWSLambda-S3-${AWS::StackName}
