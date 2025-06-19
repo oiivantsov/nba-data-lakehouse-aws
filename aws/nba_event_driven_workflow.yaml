@@ -639,8 +639,8 @@ Resources:
       the_bucket: !Ref S3BucketName
       the_stats_script_file_key: script/nba_stats_etl.py
       the_metadata_script_file_key: script/nba_metadata_etl.py
-      the_origin_stats_script_url: https://raw.githubusercontent.com/oiivantsov/nba-glue-etl-jobs/refs/heads/main/nba-totals-etl/nba-totals-etl.py
-      the_origin_metadata_script_url: https://raw.githubusercontent.com/oiivantsov/nba-glue-etl-jobs/refs/heads/main/nba-metadata-etl/nba-metadata-etl.py
+      the_origin_stats_script_url: https://raw.githubusercontent.com/oiivantsov/nba-data-lakehouse-aws/refs/heads/main/aws/nba-totals-etl.py
+      the_origin_metadata_script_url: https://raw.githubusercontent.com/oiivantsov/nba-data-lakehouse-aws/refs/heads/main/aws/nba-metadata-etl.py
 
   # source code: https://aws.amazon.com/blogs/big-data/build-a-serverless-event-driven-workflow-with-aws-glue-and-amazon-eventbridge/
   LambdaFunction:

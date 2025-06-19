@@ -22,7 +22,7 @@ default_args = {
 dag = DAG(
     dag_id='nba_data_totals_pipeline',
     default_args=default_args,
-    schedule_interval='@daily',
+    schedule_interval='0 12 * OCT-DEC,JAN-APR *',
     catchup=False,
     tags=['nba', 'etl', 'pipeline']
 )

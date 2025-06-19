@@ -26,7 +26,7 @@ default_args = {
 dag = DAG(
     dag_id='nba_metadata_pipeline',
     default_args=default_args,
-    schedule_interval='@daily',
+    schedule_interval='0 12 * OCT-DEC,JAN-APR 1',
     catchup=False,
     tags=['nba', 'etl', 'pipeline']
 )
