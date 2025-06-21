@@ -118,12 +118,14 @@ For both player statistics and player metadata, the data passes through three st
    AWS Glue ETL jobs load the raw data and perform processing:
 
    * For player statistics:
+     
      * Columns are mapped to correct data types using `ApplyMapping`
      * Additional metrics are calculated: per-game averages, shooting efficiency, points per shot
      * Ranking columns are calculated using Spark Window functions (PTS rank, REB rank, etc.)
      * A new column `ingestion_date` is added for tracking
    
    * For player metadata:
+     
      * Data is cleaned and normalized:
        * Birthdate converted to date format
        * Height and weight converted to metric units (cm, kg)
@@ -304,8 +306,10 @@ Getting AWS Glue Jobs to run correctly required several iterations:
 
 ![Glue parameters](docs/glue_params.png)
 
-* The main method for debugging Glue ETL jobs is to check Spark driver and executor logs, which can be found in the AWS Console under:
+* The main method for debugging Glue ETL jobs is to check Spark driver and executor logs, which can be found in the AWS Console under
+
   * AWS Glue > Jobs > Select your Job run > View Logs in CloudWatch
+    
 * I also used minimal Spark resource settings to avoid overspending, especially during development. For example, only 1-2 workers with basic G.1X instance type. It's very important to be careful here: Glue will happily spin up 10+ large instances even for a small CSV job if you're not explicit with configuration, which can result in unnecessary costs.
 * In addition, about $1 was accidentally spent when I experimented with the Visual ETL builder in Glue. Specifically, using the "preview schema" and "data preview" options in the UI automatically triggered a Glue Job run. It's important to be aware of this, even when testing inside the Visual ETL interface, such actions will launch actual Jobs and incur costs.
 
@@ -435,6 +439,7 @@ There are many ways this project could be extended or improved, both in terms of
 ### Data Extensions
 
 * Expand the depth of data:
+  
   * Load play-by-play logs (for more advanced metrics and modeling)
   * Load historical data for past seasons (currently the project focuses on the current season)
 
@@ -453,6 +458,7 @@ There are many ways this project could be extended or improved, both in terms of
 
 * As the pipeline grows in complexity (more data sources, more jobs), adding monitoring and alerting would be very useful.
 * This can be implemented via:
+  
   * CloudWatch Logs and Metrics, to monitor job execution times, failures, data freshness.
   * Amazon SNS (Simple Notification Service), to send automatic alerts (e.g. email or Slack) if a Glue Job fails or if a DAG run in Airflow fails.
 
@@ -465,6 +471,7 @@ There are many ways this project could be extended or improved, both in terms of
   * Provides flexible querying, almost like a database
 
 * Alternatives:
+  
   * If more complex analytics or larger volumes were needed (e.g. full historical data + play-by-play + advanced modeling), it would make sense to consider Amazon Redshift.
   * A traditional RDS database (e.g. PostgreSQL) could also be used, but for larger data volumes or more concurrent BI workloads, it would be less cost-effective and not as easily scalable as a Lakehouse architecture (S3 + Iceberg + Athena).
 
@@ -474,6 +481,7 @@ In this project, because the data was relatively small (current season only), I 
 However, adding partitioning (e.g. by season, month, or team) would significantly improve scan performance as the dataset grows.
 
 Without partitioning:
+
 * Glue Jobs do not benefit from partition pruning (i.e. skipping unnecessary partitions during scans).
 * There is also no pushdown predicate to the storage layer, so filters are applied after reading full data.
 
@@ -498,6 +506,7 @@ This would reduce unnecessary rewrites, lower costs, and improve performance, es
   * Build predictive models (e.g. MVP predictions)
 
 * However, meaningful predictive modeling would require deeper data, not just totals:
+  
   * Play-by-play logs
   * Contextual data (injuries, schedule, rest days, etc.)
 
