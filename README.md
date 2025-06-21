@@ -187,7 +187,11 @@ Apache Airflow does a great job orchestrating batch pipelines. Alternatives coul
 
 ### Why Apache Iceberg?
 
-In theory, I could have just used CSV files and registered them in Glue Data Catalog. However, I wanted a scalable and modern table format to build a Data Lakehouse, and Iceberg offers:
+In theory, I could have just used CSV files and registered them in Glue Data Catalog. However, I wanted a scalable and modern table format to build a Data Lakehouse, and Apache Iceberg is ideal for this purpose. A Lakehouse combines the flexibility and low cost of a Data Lake (S3) with many of the capabilities of a Data Warehouse (schema management, ACID transactions, time travel, efficient querying).
+
+In my case, a personal project on AWS, using Redshift or other dedicated Data Warehouse would have been more expensive. With Iceberg on S3 + Athena, I get a cost-effective, serverless architecture, perfectly suited for this type of project.
+
+Iceberg offers:
 
 * Full schema evolution
 * MERGE support (almost like a database) to not rewrite the whole table again
