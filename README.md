@@ -346,16 +346,7 @@ Managing IAM policies and S3 bucket policies was one of the more challenging par
 
 You can easily try this project yourself, no API keys required, just AWS credentials.
 
-### 1. NBA API
-
-* No manual installation required — the nba_api and all other Python dependencies are installed automatically when you run:
-
-```bash
-docker compose up --build
-```
-(see step 3 below).
-
-### 2. AWS Credentials
+### 1. AWS Credentials
 
 You will need AWS credentials:
 
@@ -363,17 +354,18 @@ You will need AWS credentials:
 2. Add your AWS access and secret keys there
 3. The S3 bucket name in your `.env` file must match the one used when creating the CloudFormation stack
 
-### 3. Launch Airflow (Docker)
+### 2. Launch Airflow and Ingestion (Docker)
 
-Run Airflow using Docker Compose:
+All required Python dependencies (nba\_api, pandas, boto3, etc.) are installed automatically when running the container.
+To start Airflow and the ingestion environment, run this command in the project folder:
 
 ```bash
 docker compose up --build
 ```
 
-Then restart the container once, on the first launch Airflow creates its default user account.
+Then restart the container once (on the first launch, Airflow creates its default user account).
 
-### 4. Deploy AWS Infrastructure (CloudFormation)
+### 3. Deploy AWS Infrastructure (CloudFormation)
 
 Open AWS CloudFormation console:
 Upload the provided [`nba_data_pipeline.yaml`](aws/nba_event_driven_workflow.yaml) file.
@@ -384,7 +376,7 @@ During creation:
 
 Takes about 3 minutes to deploy.
 
-### 5. Run the Pipeline
+### 4. Run the Pipeline
 
 Once deployed:
 
@@ -397,7 +389,7 @@ Once deployed:
 You can query the Iceberg tables using Athena directly, or as shown here, use Power BI with ODBC connector.
 
 
-### 6. (Bonus) Setting up Athena ODBC Driver
+### 5. (Bonus) Setting up Athena ODBC Driver
 
 First, download and install the Amazon Athena ODBC Driver:  
 [https://docs.aws.amazon.com/athena/latest/ug/connect-with-odbc-and-power-bi.html](https://docs.aws.amazon.com/athena/latest/ug/connect-with-odbc-and-power-bi.html)
