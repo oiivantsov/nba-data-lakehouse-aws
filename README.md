@@ -384,12 +384,12 @@ Once deployed:
 2. You will see two DAGs: one for player stats, one for player metadata
 3. Run the DAGs, after success you will have two Apache Iceberg tables ready!
 
-### 6. Explore the Data (Athena / Power BI)
+### 5. Explore the Data (Athena / Power BI)
 
 You can query the Iceberg tables using Athena directly, or as shown here, use Power BI with ODBC connector.
 
 
-### 6. (Bonus) Setting up Athena ODBC Driver
+### 5. (Bonus) Setting up Athena ODBC Driver
 
 First, download and install the Amazon Athena ODBC Driver:  
 [https://docs.aws.amazon.com/athena/latest/ug/connect-with-odbc-and-power-bi.html](https://docs.aws.amazon.com/athena/latest/ug/connect-with-odbc-and-power-bi.html)
