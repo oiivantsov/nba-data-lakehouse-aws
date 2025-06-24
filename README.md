@@ -389,7 +389,7 @@ Once deployed:
 You can query the Iceberg tables using Athena directly, or as shown here, use Power BI with ODBC connector.
 
 
-### 5. (Bonus) Setting up Athena ODBC Driver
+### 6. (Bonus) Setting up Athena ODBC Driver
 
 First, download and install the Amazon Athena ODBC Driver:  
 [https://docs.aws.amazon.com/athena/latest/ug/connect-with-odbc-and-power-bi.html](https://docs.aws.amazon.com/athena/latest/ug/connect-with-odbc-and-power-bi.html)
