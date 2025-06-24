@@ -352,7 +352,7 @@ You will need AWS credentials:
 
 1. In `/config/` create a `.env` file (see example `.env.example`)
 2. Add your AWS access and secret keys there
-3. The S3 bucket name in your `.env` file must match the one used when creating the CloudFormation stack
+3. The S3 bucket name in your `.env` file must match the one used when creating the CloudFormation stack (see step 3 below)
 
 ### 2. Launch Airflow and Ingestion (Docker)
 
