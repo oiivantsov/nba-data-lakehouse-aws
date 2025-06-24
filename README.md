@@ -348,11 +348,12 @@ You can easily try this project yourself, no API keys required, just AWS credent
 
 ### 1. NBA API
 
-* The nba_api does not require any keys, just install the requirements:
+* No manual installation required — the nba_api and all other Python dependencies are installed automatically when you run:
 
 ```bash
-pip install -r requirements.txt
+docker compose up --build
 ```
+(see step 3 below).
 
 ### 2. AWS Credentials
 
